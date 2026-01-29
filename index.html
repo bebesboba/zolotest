@@ -1359,6 +1359,7 @@
                     <button class="dev-btn" id="devBossAttack4">🔥 Сферы</button>
                     <button class="dev-btn" id="devBossAttackCar">🚗 Машина</button>
                     <button class="dev-btn" id="devBossAttackLabyrinth">🧱 Лабиринт</button>
+                    <button class="dev-btn" id="devBossAttackFirePlatform">🐍 Платформа+Змеи</button>
                 </div>
             </div>
             <div style="margin-top: 10px;">
@@ -1445,7 +1446,14 @@
             buildingPutaway: 'https://www.myinstants.com/media/sounds/building-putaway.mp3',
             legoConstruction: 'https://www.myinstants.com/media/sounds/lego-construction.mp3',
             hammerHd: 'https://www.myinstants.com/media/sounds/hammer-hd.mp3',
-            godBell: 'https://www.myinstants.com/media/sounds/god-bell.mp3'
+            godBell: 'https://www.myinstants.com/media/sounds/god-bell.mp3',
+            
+            // Атака Огненная Платформа
+            platformAlert: 'https://www.myinstants.com/media/sounds/siren.mp3',
+            firePlatformRise: 'https://www.myinstants.com/media/sounds/fire-flame.mp3',
+            snakeHiss: 'https://www.myinstants.com/media/sounds/snake-hiss.mp3',
+            snakeJump: 'https://www.myinstants.com/media/sounds/whoosh-sfx.mp3',
+            fireHit: 'https://www.myinstants.com/media/sounds/fire-hit.mp3'
         };
         
         // Батя Ивана
@@ -2232,6 +2240,7 @@
             finalBoss.stage = 1;
             finalBoss.stage2AttackCount = 0;
             finalBoss.carAttackUsed = false;
+            finalBoss.firePlatformAttackUsed = false;
             
             fireShards = [];
             
@@ -4164,12 +4173,25 @@
                     
                     // Инициализируем флаги атак
                     if (!finalBoss.labyrinthAttackUsed) finalBoss.labyrinthAttackUsed = false;
+                    if (!finalBoss.firePlatformAttackUsed) finalBoss.firePlatformAttackUsed = false;
                     
                     // Атака Лабиринт: приоритетная атака, если еще не была
                     if (!finalBoss.labyrinthAttackUsed && finalBoss.stage2AttackCount > 1) {
                         if (Math.random() < 0.4 || finalBoss.stage2AttackCount > 4) {
                             startLabyrinthAttack();
                         } else if (!finalBoss.carAttackUsed && Math.random() < 0.5) {
+                            startCarAttack();
+                        } else if (!finalBoss.firePlatformAttackUsed && Math.random() < 0.5) {
+                            startFirePlatformAttack();
+                        } else {
+                            startFireCircleAttack();
+                        }
+                    }
+                    // Атака Огненная Платформа: приоритетная, если еще не была
+                    else if (!finalBoss.firePlatformAttackUsed && finalBoss.stage2AttackCount > 1) {
+                        if (Math.random() < 0.5 || finalBoss.stage2AttackCount > 3) {
+                            startFirePlatformAttack();
+                        } else if (!finalBoss.carAttackUsed && Math.random() < 0.4) {
                             startCarAttack();
                         } else {
                             startFireCircleAttack();
@@ -4211,6 +4233,8 @@
                 updateCarAttack(dt);
             } else if (finalBoss.currentAttack === 'labyrinth') {
                 updateLabyrinthAttack(dt);
+            } else if (finalBoss.currentAttack === 'firePlatform') {
+                updateFirePlatformAttack(dt);
             }
             
             // ВСЕГДА обновляем брошенные какашки (даже вне паузы!)
@@ -4943,6 +4967,22 @@
             console.log('END CAR ATTACK');
         }
 
+
+        // === АТАКА: ОГНЕННАЯ ПЛАТФОРМА И ЗМЕИ ===
+        let firePlatformAttack = {
+            active: false,
+            phase: 0, // 0 - предупреждение, 1 - появление платформы, 2 - инструкция, 3 - игра со змеями, 4 - завершение
+            timer: 0,
+            platformY: 0, // Высота платформы
+            duration: 25, // Длительность атаки (секунды)
+            timeLeft: 25,
+            warningZone: null, // Зона предупреждения
+            instructionsShown: false
+        };
+        let fireSnakes = []; // Огненные змеи
+        let originalGravityEnabled = false; // Сохраняем оригинальное состояние гравитации
+        let originalPlayerControl = 'cursor'; // Сохраняем оригинальное управление
+
         function stopCarSounds() {
             if (carAttack.engineAudio) {
                 try { carAttack.engineAudio.pause(); } catch(e){}
@@ -5144,62 +5184,105 @@
         }
 
         function generateLabyrinth() {
-            // Создаем простой но проходимый лабиринт
+            // УСЛОЖНЁННЫЙ ЛАБИРИНТ - Алгоритм Recursive Backtracking
             const centerX = player.x;
             const centerY = player.y;
-            const cellSize = 80; // Увеличиваем размер клетки для широких проходов
-            const wallThickness = 20; // Уменьшаем толщину стен
-            const gridSize = 9; // Размер сетки
+            const cellSize = 70; // Проходы достаточно широкие
+            const gridSize = 15; // Больше клеток = сложнее лабиринт
             
-            // Создаем сетку - true = стена, false = проход
+            // Создаем сетку - изначально все стены
             const grid = [];
+            const visited = [];
             for (let y = 0; y < gridSize; y++) {
                 grid[y] = [];
+                visited[y] = [];
                 for (let x = 0; x < gridSize; x++) {
-                    // Все внутренние клетки начинают как стены
-                    grid[y][x] = (x === 0 || y === 0 || x === gridSize-1 || y === gridSize-1);
+                    grid[y][x] = true; // true = стена
+                    visited[y][x] = false;
                 }
             }
             
-            // Создаем простой лабиринт с гарантированным путем
-            // Делаем несколько горизонтальных и вертикальных коридоров
-            
-            // Горизонтальные коридоры (проходы)
-            for (let row = 2; row < gridSize - 1; row += 2) {
-                for (let col = 1; col < gridSize - 1; col++) {
-                    grid[row][col] = false; // Убираем стену = создаем проход
+            // Recursive Backtracking алгоритм для генерации лабиринта
+            function carvePath(x, y) {
+                visited[y][x] = true;
+                grid[y][x] = false; // Убираем стену
+                
+                // Направления: вверх, вправо, вниз, влево
+                const directions = [
+                    {dx: 0, dy: -1},
+                    {dx: 1, dy: 0},
+                    {dx: 0, dy: 1},
+                    {dx: -1, dy: 0}
+                ];
+                
+                // Перемешиваем направления для случайности
+                for (let i = directions.length - 1; i > 0; i--) {
+                    const j = Math.floor(Math.random() * (i + 1));
+                    [directions[i], directions[j]] = [directions[j], directions[i]];
                 }
-                // Случайная вертикальная стена в коридоре (не блокируем полностью)
-                const blockCol = 2 + Math.floor(Math.random() * (gridSize - 4));
-                if (blockCol > 0 && blockCol < gridSize - 1) {
-                    grid[row][blockCol] = true;
+                
+                for (let dir of directions) {
+                    const nx = x + dir.dx * 2;
+                    const ny = y + dir.dy * 2;
+                    
+                    if (nx >= 1 && nx < gridSize - 1 && ny >= 1 && ny < gridSize - 1 && !visited[ny][nx]) {
+                        // Убираем стену между текущей и следующей клеткой
+                        grid[y + dir.dy][x + dir.dx] = false;
+                        carvePath(nx, ny);
+                    }
                 }
             }
             
-            // Вертикальные коридоры
-            for (let col = 2; col < gridSize - 1; col += 2) {
-                for (let row = 1; row < gridSize - 1; row++) {
-                    grid[row][col] = false; // Проход
-                }
-                // Случайная горизонтальная стена
-                const blockRow = 2 + Math.floor(Math.random() * (gridSize - 4));
-                if (blockRow > 0 && blockRow < gridSize - 1) {
-                    grid[blockRow][col] = true;
+            // Начинаем с центра
+            let startX = Math.floor(gridSize / 2);
+            let startY = Math.floor(gridSize / 2);
+            if (startX % 2 === 0) startX--;
+            if (startY % 2 === 0) startY--;
+            carvePath(startX, startY);
+            
+            // Добавляем дополнительные проходы для усложнения (больше путей = больше тупиков)
+            const extraPaths = 8 + Math.floor(Math.random() * 8); // 8-16 дополнительных проходов
+            for (let i = 0; i < extraPaths; i++) {
+                const rx = 1 + Math.floor(Math.random() * (gridSize - 2));
+                const ry = 1 + Math.floor(Math.random() * (gridSize - 2));
+                if (grid[ry][rx]) {
+                    grid[ry][rx] = false;
                 }
             }
             
-            // Обязательно делаем центр проходимым
-            const centerCell = Math.floor(gridSize / 2);
-            grid[centerCell][centerCell] = false;
-            grid[centerCell-1][centerCell] = false;
-            grid[centerCell+1][centerCell] = false;
-            grid[centerCell][centerCell-1] = false;
-            grid[centerCell][centerCell+1] = false;
+            // Создаем выход в случайном углу (НЕ в центре!)
+            const exitSide = Math.floor(Math.random() * 4);
+            let exitCol, exitRow;
             
-            // Создаем выход внизу
-            const exitCol = Math.floor(gridSize / 2);
-            grid[gridSize-1][exitCol] = false;
-            grid[gridSize-2][exitCol] = false;
+            if (exitSide === 0) { // Верх
+                exitCol = 1 + Math.floor(Math.random() * (gridSize - 2));
+                exitRow = 0;
+                grid[0][exitCol] = false;
+                grid[1][exitCol] = false;
+                labyrinthAttack.exitX = centerX - (gridSize * cellSize) / 2 + exitCol * cellSize + cellSize/2;
+                labyrinthAttack.exitY = centerY - (gridSize * cellSize) / 2 - 20;
+            } else if (exitSide === 1) { // Право
+                exitCol = gridSize - 1;
+                exitRow = 1 + Math.floor(Math.random() * (gridSize - 2));
+                grid[exitRow][gridSize-1] = false;
+                grid[exitRow][gridSize-2] = false;
+                labyrinthAttack.exitX = centerX + (gridSize * cellSize) / 2 + 20;
+                labyrinthAttack.exitY = centerY - (gridSize * cellSize) / 2 + exitRow * cellSize + cellSize/2;
+            } else if (exitSide === 2) { // Низ
+                exitCol = 1 + Math.floor(Math.random() * (gridSize - 2));
+                exitRow = gridSize - 1;
+                grid[gridSize-1][exitCol] = false;
+                grid[gridSize-2][exitCol] = false;
+                labyrinthAttack.exitX = centerX - (gridSize * cellSize) / 2 + exitCol * cellSize + cellSize/2;
+                labyrinthAttack.exitY = centerY + (gridSize * cellSize) / 2 + 20;
+            } else { // Лево
+                exitCol = 0;
+                exitRow = 1 + Math.floor(Math.random() * (gridSize - 2));
+                grid[exitRow][0] = false;
+                grid[exitRow][1] = false;
+                labyrinthAttack.exitX = centerX - (gridSize * cellSize) / 2 - 20;
+                labyrinthAttack.exitY = centerY - (gridSize * cellSize) / 2 + exitRow * cellSize + cellSize/2;
+            }
             
             // Вычисляем размеры лабиринта
             const labWidth = gridSize * cellSize;
@@ -5223,16 +5306,14 @@
                 }
             }
             
-            // Позиция выхода
-            labyrinthAttack.exitX = left + exitCol * cellSize + cellSize/2;
-            labyrinthAttack.exitY = top + gridSize * cellSize + 20;
-            
             // Плавное появление стен
             labyrinthWalls.forEach((wall, i) => {
                 setTimeout(() => {
                     if (labyrinthWalls[i]) labyrinthWalls[i].alpha = 1;
-                }, i * 5);
+                }, i * 3);
             });
+            
+            devLog(`Лабиринт создан: ${labyrinthWalls.length} стен, выход на стороне ${exitSide}`);
         }
 
         function spawnLabyrinthBonuses() {
@@ -5428,6 +5509,409 @@
         }
 
         // ==================== АТАКА ОГНЕННЫХ КРУГОВ (СТАДИЯ 2) ====================
+
+        // ========== АТАКА: ОГНЕННАЯ ПЛАТФОРМА И ЗМЕИ ==========
+        
+        function startFirePlatformAttack() {
+            finalBoss.currentAttack = 'firePlatform';
+            finalBoss.firePlatformAttackUsed = true;
+            firePlatformAttack.active = true;
+            firePlatformAttack.phase = 0; // Начинаем с предупреждения
+            firePlatformAttack.timer = 0;
+            firePlatformAttack.timeLeft = firePlatformAttack.duration;
+            firePlatformAttack.instructionsShown = false;
+            fireSnakes = [];
+            
+            // Сохраняем оригинальные настройки
+            originalGravityEnabled = false; // В игре гравитации нет по умолчанию
+            originalPlayerControl = controlType;
+            
+            // Зона предупреждения (где появится платформа)
+            firePlatformAttack.warningZone = {
+                x: player.x,
+                y: player.y + 100,
+                width: 600,
+                height: 100,
+                alpha: 0
+            };
+            
+            devLog('Атака: ОГНЕННАЯ ПЛАТФОРМА И ЗМЕИ!');
+        }
+        
+        function updateFirePlatformAttack(dt) {
+            firePlatformAttack.timer += dt;
+            const t = firePlatformAttack.timer;
+            
+            // ЭТАП 0: Предупреждение (1 сек)
+            if (firePlatformAttack.phase === 0) {
+                if (t < 0.1) {
+                    playSound('platformAlert', 0.7);
+                }
+                
+                // Анимация зоны предупреждения
+                firePlatformAttack.warningZone.alpha = Math.sin(t * 10) * 0.5 + 0.5;
+                
+                if (t >= 1) {
+                    firePlatformAttack.phase = 1;
+                    firePlatformAttack.timer = 0;
+                    playSound('firePlatformRise', 0.6);
+                }
+            }
+            // ЭТАП 1: Появление платформы и подъём (2 сек)
+            else if (firePlatformAttack.phase === 1) {
+                const progress = Math.min(1, t / 2);
+                firePlatformAttack.platformY = player.y + 100 + progress * 200;
+                
+                // Игрок поднимается вместе с платформой
+                player.y = firePlatformAttack.platformY - 50;
+                player.targetY = player.y;
+                
+                // Блокируем обычное движение
+                player.canMove = false;
+                
+                if (t >= 2) {
+                    firePlatformAttack.phase = 2;
+                    firePlatformAttack.timer = 0;
+                }
+            }
+            // ЭТАП 2: Инструкция (5 сек)
+            else if (firePlatformAttack.phase === 2) {
+                // Показываем инструкции
+                if (!firePlatformAttack.instructionsShown) {
+                    firePlatformAttack.instructionsShown = true;
+                    showFirePlatformInstructions();
+                }
+                
+                // Игрок может двигаться только горизонтально и прыгать
+                enablePlatformControls();
+                
+                if (t >= 5) {
+                    firePlatformAttack.phase = 3;
+                    firePlatformAttack.timer = 0;
+                    hideFirePlatformInstructions();
+                    // Спавним змей
+                    spawnFireSnakes();
+                    playSound('snakeHiss', 0.5);
+                }
+            }
+            // ЭТАП 3: Игра со змеями
+            else if (firePlatformAttack.phase === 3) {
+                firePlatformAttack.timeLeft -= dt;
+                
+                // Управление на платформе
+                enablePlatformControls();
+                
+                // Обновляем змей
+                updateFireSnakes(dt);
+                
+                // Проверка времени
+                if (firePlatformAttack.timeLeft <= 0) {
+                    endFirePlatformAttack(true);
+                }
+            }
+        }
+        
+        function enablePlatformControls() {
+            // Игрок может двигаться только ← → и SPACE (прыжок)
+            player.canMove = true;
+            
+            // Применяем простую "гравитацию" - игрок притягивается к платформе
+            const platformSurface = firePlatformAttack.platformY - 50;
+            if (player.y < platformSurface - 120) {
+                // Игрок слишком высоко - падает вниз
+                player.y += 3;
+            } else if (player.y > platformSurface) {
+                // Игрок ниже платформы - поднимается
+                player.y = platformSurface;
+            }
+            
+            // Ограничиваем движение по Y (игрок не может лететь бесконечно вверх)
+            if (player.targetY < platformSurface - 120) {
+                player.targetY = platformSurface - 120;
+            }
+        }
+        
+        function spawnFireSnakes() {
+            // Создаём 3-5 огненных змей снизу
+            const count = 3 + Math.floor(Math.random() * 3);
+            const platformCenterX = player.x;
+            const platformY = firePlatformAttack.platformY;
+            
+            for (let i = 0; i < count; i++) {
+                const offsetX = (i - count/2) * 200 + (Math.random() - 0.5) * 100;
+                fireSnakes.push({
+                    x: platformCenterX + offsetX,
+                    y: platformY + 200 + Math.random() * 100,
+                    vx: (Math.random() - 0.5) * 2,
+                    vy: (Math.random() - 0.5) * 2,
+                    length: 60 + Math.random() * 40,
+                    jumpTimer: Math.random() * 3, // Случайная задержка перед прыжком
+                    jumping: false,
+                    jumpY: 0,
+                    phase: Math.random() * Math.PI * 2 // Фаза волнообразного движения
+                });
+            }
+        }
+        
+        function updateFireSnakes(dt) {
+            fireSnakes.forEach(snake => {
+                if (!snake.jumping) {
+                    // Хаотичное движение
+                    snake.x += snake.vx;
+                    snake.y += snake.vy;
+                    snake.phase += dt * 2;
+                    
+                    // Волнообразное движение
+                    snake.x += Math.cos(snake.phase) * 1.5;
+                    snake.y += Math.sin(snake.phase * 0.8) * 1;
+                    
+                    // Держим змей в зоне под платформой
+                    const platformCenterX = player.x;
+                    const platformY = firePlatformAttack.platformY;
+                    
+                    if (snake.x < platformCenterX - 400) snake.vx = Math.abs(snake.vx);
+                    if (snake.x > platformCenterX + 400) snake.vx = -Math.abs(snake.vx);
+                    if (snake.y < platformY + 150) snake.vy = Math.abs(snake.vy);
+                    if (snake.y > platformY + 350) snake.vy = -Math.abs(snake.vy);
+                    
+                    // Таймер для выпрыгивания
+                    snake.jumpTimer -= dt;
+                    if (snake.jumpTimer <= 0) {
+                        // Змея выпрыгивает!
+                        snake.jumping = true;
+                        snake.jumpY = snake.y;
+                        snake.jumpTargetY = platformY - 70; // Прыгает до уровня игрока
+                        snake.jumpSpeed = 12;
+                        playSound('snakeJump', 0.4);
+                        snake.jumpTimer = 2 + Math.random() * 3; // Следующий прыжок через 2-5 сек
+                    }
+                } else {
+                    // Змея прыгает вверх
+                    snake.y -= snake.jumpSpeed;
+                    snake.jumpSpeed -= 0.6; // Гравитация
+                    
+                    // Проверка контакта с игроком
+                    const dx = snake.x - player.x;
+                    const dy = snake.y - player.y;
+                    const dist = Math.sqrt(dx*dx + dy*dy);
+                    
+                    if (dist < player.radius + 20) {
+                        // Попадание!
+                        if (player.shield > 0) {
+                            player.shield--;
+                            playSound('hit', 0.6);
+                        } else if (!godMode) {
+                            gameOver();
+                        }
+                        // Отбрасываем змею назад вниз
+                        snake.jumping = false;
+                        snake.y = firePlatformAttack.platformY + 200;
+                        snake.jumpSpeed = 0;
+                    }
+                    
+                    // Змея падает обратно вниз
+                    if (snake.y > snake.jumpY) {
+                        snake.jumping = false;
+                        snake.y = snake.jumpY;
+                        snake.jumpSpeed = 0;
+                    }
+                }
+            });
+        }
+        
+        function endFirePlatformAttack(success) {
+            firePlatformAttack.active = false;
+            fireSnakes = [];
+            
+            finalBoss.currentAttack = null;
+            player.canMove = true;
+            
+            // Возвращаем игрока на нормальную высоту
+            player.y = canvas.height / 2;
+            player.targetY = player.y;
+            
+            if (success) {
+                devLog('Игрок пережил огненную платформу!');
+                finalBoss.attackTimer = 2;
+                spawnPoops(1); // Награда: какашка для броска
+                playMusic('stage2Music', 0.5);
+            }
+        }
+        
+        function showFirePlatformInstructions() {
+            // Создаём элемент с инструкциями если его нет
+            let instructionEl = document.getElementById('platformInstructions');
+            if (!instructionEl) {
+                instructionEl = document.createElement('div');
+                instructionEl.id = 'platformInstructions';
+                instructionEl.style.cssText = `
+                    position: fixed;
+                    top: 50%;
+                    left: 50%;
+                    transform: translate(-50%, -50%);
+                    background: linear-gradient(135deg, rgba(0,0,0,0.95), rgba(50,0,0,0.95));
+                    padding: 30px 50px;
+                    border-radius: 20px;
+                    color: white;
+                    font-size: 18px;
+                    z-index: 400;
+                    text-align: center;
+                    border: 3px solid #ff6600;
+                    box-shadow: 0 0 50px rgba(255, 100, 0, 0.5);
+                `;
+                document.body.appendChild(instructionEl);
+            }
+            
+            instructionEl.innerHTML = `
+                <h2 style="font-size: 32px; margin-bottom: 20px; color: #ff6600;">🔥 ОГНЕННАЯ ПЛАТФОРМА 🔥</h2>
+                <p style="margin: 10px 0;"><strong>← →</strong> Движение</p>
+                <p style="margin: 10px 0;"><strong>SPACE</strong> Прыжок</p>
+                <p style="margin: 10px 0; color: #ff6666;"><strong>Избегай огненных змей!</strong></p>
+            `;
+            instructionEl.style.display = 'block';
+        }
+        
+        function hideFirePlatformInstructions() {
+            const instructionEl = document.getElementById('platformInstructions');
+            if (instructionEl) {
+                instructionEl.style.display = 'none';
+            }
+        }
+        
+        function renderFirePlatform() {
+            // Рендер зоны предупреждения
+            if (firePlatformAttack.phase === 0 && firePlatformAttack.warningZone) {
+                const zone = firePlatformAttack.warningZone;
+                ctx.save();
+                ctx.globalAlpha = zone.alpha;
+                ctx.fillStyle = '#ff0000';
+                ctx.fillRect(zone.x - zone.width/2, zone.y - zone.height/2, zone.width, zone.height);
+                ctx.strokeStyle = '#ff6600';
+                ctx.lineWidth = 4;
+                ctx.strokeRect(zone.x - zone.width/2, zone.y - zone.height/2, zone.width, zone.height);
+                ctx.restore();
+                
+                // Текст предупреждения
+                ctx.save();
+                ctx.globalAlpha = zone.alpha;
+                ctx.font = 'bold 24px Arial';
+                ctx.textAlign = 'center';
+                ctx.fillStyle = '#ffffff';
+                ctx.fillText('⚠️ ВНИМАНИЕ! ⚠️', zone.x, zone.y);
+                ctx.restore();
+            }
+            
+            // Рендер платформы
+            if (firePlatformAttack.phase >= 1) {
+                const platformX = player.x;
+                const platformY = firePlatformAttack.platformY;
+                const platformWidth = 600;
+                const platformHeight = 30;
+                
+                ctx.save();
+                
+                // Огненная текстура платформы
+                const grad = ctx.createLinearGradient(platformX - platformWidth/2, platformY, platformX + platformWidth/2, platformY);
+                grad.addColorStop(0, '#ff4400');
+                grad.addColorStop(0.3, '#ff6600');
+                grad.addColorStop(0.5, '#ff8800');
+                grad.addColorStop(0.7, '#ff6600');
+                grad.addColorStop(1, '#ff4400');
+                ctx.fillStyle = grad;
+                
+                // Основная платформа
+                ctx.fillRect(platformX - platformWidth/2, platformY - platformHeight/2, platformWidth, platformHeight);
+                
+                // Языки пламени по краям
+                if (!lowGraphics) {
+                    for (let i = 0; i < 20; i++) {
+                        const flameX = platformX - platformWidth/2 + i * (platformWidth/19);
+                        const flameHeight = 15 + Math.sin(Date.now() * 0.01 + i) * 8;
+                        ctx.fillStyle = `rgba(255, ${100 + Math.random() * 100}, 0, 0.7)`;
+                        ctx.beginPath();
+                        ctx.moveTo(flameX, platformY - platformHeight/2);
+                        ctx.lineTo(flameX - 5, platformY - platformHeight/2 - flameHeight);
+                        ctx.lineTo(flameX + 5, platformY - platformHeight/2 - flameHeight);
+                        ctx.closePath();
+                        ctx.fill();
+                    }
+                }
+                
+                // Свечение
+                ctx.shadowColor = '#ff6600';
+                ctx.shadowBlur = 30;
+                ctx.strokeStyle = '#ff8800';
+                ctx.lineWidth = 3;
+                ctx.strokeRect(platformX - platformWidth/2, platformY - platformHeight/2, platformWidth, platformHeight);
+                
+                ctx.restore();
+            }
+        }
+        
+        function renderFireSnakes() {
+            fireSnakes.forEach(snake => {
+                ctx.save();
+                
+                // Тело змеи (волнообразное)
+                const segments = 8;
+                ctx.beginPath();
+                for (let i = 0; i < segments; i++) {
+                    const segX = snake.x + Math.cos(snake.phase + i * 0.5) * 10;
+                    const segY = snake.y + i * (snake.length / segments);
+                    if (i === 0) {
+                        ctx.moveTo(segX, segY);
+                    } else {
+                        ctx.lineTo(segX, segY);
+                    }
+                }
+                
+                // Градиент змеи
+                const snakeGrad = ctx.createLinearGradient(snake.x, snake.y, snake.x, snake.y + snake.length);
+                snakeGrad.addColorStop(0, '#ff0000');
+                snakeGrad.addColorStop(0.5, '#ff6600');
+                snakeGrad.addColorStop(1, '#ff8800');
+                
+                ctx.strokeStyle = snakeGrad;
+                ctx.lineWidth = 12;
+                ctx.lineCap = 'round';
+                ctx.shadowColor = '#ff6600';
+                ctx.shadowBlur = 20;
+                ctx.stroke();
+                
+                // Голова змеи (более яркая)
+                ctx.beginPath();
+                ctx.arc(snake.x, snake.y, 10, 0, Math.PI * 2);
+                ctx.fillStyle = '#ffff00';
+                ctx.shadowColor = '#ffff00';
+                ctx.shadowBlur = 25;
+                ctx.fill();
+                
+                // Глаза змеи
+                ctx.shadowBlur = 0;
+                ctx.fillStyle = '#ff0000';
+                ctx.beginPath();
+                ctx.arc(snake.x - 4, snake.y - 2, 2, 0, Math.PI * 2);
+                ctx.arc(snake.x + 4, snake.y - 2, 2, 0, Math.PI * 2);
+                ctx.fill();
+                
+                // Частицы огня
+                if (!lowGraphics && Math.random() < 0.3) {
+                    particles.push({
+                        x: snake.x + (Math.random() - 0.5) * 20,
+                        y: snake.y + Math.random() * snake.length,
+                        vx: (Math.random() - 0.5) * 2,
+                        vy: -Math.random() * 2,
+                        radius: 2 + Math.random() * 3,
+                        color: Math.random() > 0.5 ? '#ff6600' : '#ff8800',
+                        alpha: 1,
+                        life: 0.5
+                    });
+                }
+                
+                ctx.restore();
+            });
+        }
+
         function startFireCircleAttack() {
             finalBoss.currentAttack = 'fireCircles';
             fireCircleAttack.active = true;
@@ -8208,6 +8692,12 @@
                     renderLabyrinth();
                 }
                 
+                // Огненная Платформа
+                if (firePlatformAttack.active) {
+                    renderFirePlatform();
+                    renderFireSnakes();
+                }
+                
                 // (Индикатор паузы удалён - какашки появляются от бати)
                 
                 // Эффект удара кулаком
@@ -9290,6 +9780,7 @@
         document.getElementById('devBossAttack4').addEventListener('click', () => triggerBossAttack(startFireCircleAttack));
         document.getElementById('devBossAttackCar').addEventListener('click', () => triggerBossAttack(startCarAttack));
         document.getElementById('devBossAttackLabyrinth').addEventListener('click', () => triggerBossAttack(startLabyrinthAttack));
+        document.getElementById('devBossAttackFirePlatform').addEventListener('click', () => triggerBossAttack(startFirePlatformAttack));
         
         // Кнопка скипа ивента
         document.getElementById('devSkipEvent').addEventListener('click', function() {
